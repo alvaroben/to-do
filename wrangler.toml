@@ -1,0 +1,8 @@
+name = "to-do"
+compatibility_date = "2026-11-01"
+pages_build_output_dir = "./public"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "to-do"
+database_id = "cb547618-3ef8-42ed-9b89-1d51aaaf2e7d"

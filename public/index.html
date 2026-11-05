@@ -214,6 +214,92 @@ h2 .n { font: 500 13px var(--f-mono); color: var(--muted); margin-left: 6px; }
 }
 </style>
 
+<script>
+/* Sincronización con la base de datos (Cloudflare D1) a través de /api/tareas.
+   Si la API no responde, la página sigue funcionando con el almacenamiento del navegador. */
+(function () {
+  var API = '/api/tareas', listo = false, timer = null;
+  var $ = function (id) { return document.getElementById(id); };
+  var map = function (l, f) { return Array.prototype.map.call(l, f); };
+  var val = function (li, s) { var x = li.querySelector(s); return x ? x.value : ''; };
+
+  function leer(sel, hecha) {
+    return map(document.querySelectorAll(sel + ' > .fila'), function (li) {
+      return {
+        titulo: val(li, '.titulo'), proyecto: val(li, '.proyecto'),
+        prioridad: val(li, '.prioridad') || 'media', fecha: val(li, '.fecha'), hecha: hecha,
+        pasos: map(li.querySelectorAll('.paso'), function (p) {
+          return { t: p.querySelector('.paso-t').value, ok: p.querySelector('.paso-ok').checked };
+        })
+      };
+    });
+  }
+  function todas() { return leer('#lista', 0).concat(leer('#lista-hechas', 1)); }
+
+  function fijar(el, v) { el.value = v; el.setAttribute('value', v); }
+  function crear(t) {
+    var w = document.createElement('div');
+    w.innerHTML = $('tpl-tarea').innerHTML;
+    var li = w.querySelector('.fila');
+    fijar(li.querySelector('.titulo'), t.titulo);
+    fijar(li.querySelector('.proyecto'), t.proyecto || '');
+    fijar(li.querySelector('.fecha'), t.fecha || '');
+    li.setAttribute('data-p', t.prioridad);
+    var s = li.querySelector('.prioridad');
+    s.value = t.prioridad;
+    map(s.options, function (o) {
+      if (o.value === t.prioridad) o.setAttribute('selected', ''); else o.removeAttribute('selected');
+    });
+    if (t.hecha) { var h = li.querySelector('.hecha'); h.checked = true; h.setAttribute('checked', ''); }
+    var ul = li.querySelector('.pasos');
+    (t.pasos || []).forEach(function (p) {
+      var w2 = document.createElement('div');
+      w2.innerHTML = $('tpl-paso').innerHTML;
+      var pa = w2.querySelector('.paso');
+      fijar(pa.querySelector('.paso-t'), p.t);
+      if (p.ok) { var c = pa.querySelector('.paso-ok'); c.checked = true; c.setAttribute('checked', ''); }
+      ul.appendChild(pa);
+    });
+    return li;
+  }
+
+  function pedir(opts) {
+    var c = new AbortController();
+    var id = setTimeout(function () { c.abort(); }, 4000);
+    opts = opts || {};
+    opts.signal = c.signal;
+    return fetch(API, opts).finally(function () { clearTimeout(id); });
+  }
+  async function enviar() {
+    try {
+      await pedir({ method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tareas: todas() }) });
+    } catch (e) { console.warn('No se pudo guardar en la base de datos', e); }
+  }
+
+  // Carga lo guardado en la base de datos. Si aún no hay nada (primera vez), sube lo que hay en pantalla.
+  window.itiCargar = async function () {
+    try {
+      var r = await pedir();
+      if (!r.ok) return;
+      var d = await r.json();
+      listo = true;
+      if (d.inicializado) {
+        $('lista').innerHTML = '';
+        $('lista-hechas').innerHTML = '';
+        d.tareas.forEach(function (t) { $(t.hecha ? 'lista-hechas' : 'lista').appendChild(crear(t)); });
+      } else {
+        enviar();
+      }
+    } catch (e) { console.warn('Sin conexión con la base de datos; se usa el navegador', e); }
+  };
+  window.itiGuardar = function () {
+    if (!listo) return;
+    clearTimeout(timer);
+    timer = setTimeout(enviar, 600);
+  };
+})();
+</script>
+
 <script type="text/hyperscript">
 -- ---------- utilidades ----------
 def hoyMs()
@@ -383,6 +469,7 @@ end
 
 def guardar()
   call resumen()
+  call itiGuardar()
   call localStorage.setItem('itinerario-htmx-p', #lista.innerHTML)
   call localStorage.setItem('itinerario-htmx-h', #lista-hechas.innerHTML)
 catch e
@@ -526,6 +613,7 @@ behavior Itinerario
     set t to ahora.toLocaleDateString('es-DO', {weekday: 'long', day: 'numeric', month: 'long'})
     put 'Hoy · ' + t.charAt(0).toUpperCase() + t.substring(1) into #hoy
     call restaurar()
+    call itiCargar()
     call pintarTema()
     remove .armado from <.armado/>
     call refrescarTodo()
@@ -745,7 +833,7 @@ end
     <p class="resumen" aria-live="polite">
       <span id="r-total"></span><span id="r-alta" class="r-alta"></span><span id="r-venc" class="r-venc"></span><span id="r-prox"></span>
     </p>
-    <p class="nota">Tus pendientes se guardan en este navegador.</p>
+    <p class="nota">Tus pendientes se guardan en la base de datos (y en este navegador como respaldo).</p>
   </header>
 
   <form class="nueva grupo" id="nueva" autocomplete="off">
