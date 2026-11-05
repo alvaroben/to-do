@@ -1,0 +1,959 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Itinerario htmx</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="htmx-config" content='{"timeout":4000,"allowEval":false,"allowScriptTags":false,"historyEnabled":false,"selfRequestsOnly":true}'>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Instrument+Sans:wght@400..700&family=JetBrains+Mono:wght@400..600&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hyperscript.org@0.9.14/dist/_hyperscript.min.js"></script>
+<style>
+/* Layout: una ruta vertical de paradas numeradas con CSS (el orden de trabajo); cada parada es una tarjeta con prioridad, entrega y lo que falta. */
+:root {
+  --bg: #EEF1F2;
+  --surface: #FFFFFF;
+  --ink: #15222B;
+  --muted: #586972;
+  --line: #D3DBDF;
+  --soft: #E4EAED;
+  --accent: #1D4ED8;
+  --accent-ink: #FFFFFF;
+  --alta: #BE3A2E;
+  --alta-bg: #FBE9E6;
+  --media: #8F5A07;
+  --media-bg: #FBF0DB;
+  --baja: #3F6482;
+  --baja-bg: #E3ECF3;
+  --ok: #2E7D5B;
+  --shadow: 0 14px 32px rgb(21 34 43 / 0.22);
+  --f-display: 'Bricolage Grotesque', system-ui, sans-serif;
+  --f-body: 'Instrument Sans', system-ui, sans-serif;
+  --f-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12181C;
+    --surface: #1A2227;
+    --ink: #E6ECEF;
+    --muted: #93A3AB;
+    --line: #2B373D;
+    --soft: #242F35;
+    --accent: #7BA2FF;
+    --accent-ink: #0B1220;
+    --alta: #FF8A7E;
+    --alta-bg: #3A1E1B;
+    --media: #EDB85C;
+    --media-bg: #3A2E16;
+    --baja: #9DBBD6;
+    --baja-bg: #1F2F3C;
+    --ok: #6CC49A;
+    --shadow: 0 14px 32px rgb(0 0 0 / 0.5);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12181C;
+  --surface: #1A2227;
+  --ink: #E6ECEF;
+  --muted: #93A3AB;
+  --line: #2B373D;
+  --soft: #242F35;
+  --accent: #7BA2FF;
+  --accent-ink: #0B1220;
+  --alta: #FF8A7E;
+  --alta-bg: #3A1E1B;
+  --media: #EDB85C;
+  --media-bg: #3A2E16;
+  --baja: #9DBBD6;
+  --baja-bg: #1F2F3C;
+  --ok: #6CC49A;
+  --shadow: 0 14px 32px rgb(0 0 0 / 0.5);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 15px/1.45 var(--f-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.pagina { max-width: 880px; margin: 0 auto; padding-block: 28px 80px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; }
+.pagina.moviendo, .pagina.moviendo * { cursor: grabbing; user-select: none; -webkit-user-select: none; }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Evita el parpadeo mientras se restaura lo guardado; si el script no carga, se muestra igual tras 1.5 s */
+.pagina:not(.listo) .grupo { opacity: 0; animation: aparece .01s linear 1.5s forwards; }
+@keyframes aparece { to { opacity: 1; } }
+#plantillas, #cargador { display: none; }
+
+/* Cabecera */
+.cab { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.cab-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.hoy { margin: 0; font: 500 12px var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.tema { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+.tema:hover { border-color: var(--accent); color: var(--accent); }
+h1 { margin: 0; font: 700 clamp(28px, 6vw, 40px)/1.05 var(--f-display); letter-spacing: -.02em; text-wrap: balance; }
+.resumen { margin: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; font: 500 13px var(--f-mono); color: var(--muted); }
+.resumen span:empty { display: none; }
+.resumen .r-alta, .resumen .r-venc { color: var(--alta); }
+.resumen .r-venc { font-weight: 600; }
+.nota { margin: 0; font-size: 13px; color: var(--muted); }
+
+/* Formulario */
+.nueva { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.2fr) 130px 160px auto; gap: 10px; align-items: end; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+.campo { display: grid; gap: 4px; min-width: 0; }
+.campo > span { font: 600 11px var(--f-body); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.campo input, .campo select { height: 38px; width: 100%; min-width: 0; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.campo input:focus, .campo select:focus { border-color: var(--accent); }
+.btn { height: 38px; padding: 0 18px; border: 0; border-radius: 8px; background: var(--accent); color: var(--accent-ink); font-weight: 600; cursor: pointer; }
+.btn:hover { filter: brightness(1.08); }
+@media (max-width: 820px) {
+  .nueva { grid-template-columns: 1fr 1fr; }
+  .nueva .c-titulo, .nueva .btn { grid-column: 1 / -1; }
+}
+
+/* Barra de lista */
+.barra { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+h2 { margin: 0; font: 650 20px var(--f-display); letter-spacing: -.01em; }
+h2 .n { font: 500 13px var(--f-mono); color: var(--muted); margin-left: 6px; }
+.orden { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.chip-btn { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 5px 12px; font-size: 13px; cursor: pointer; }
+.chip-btn:hover { border-color: var(--accent); color: var(--accent); }
+.vacio { display: none; padding: 28px 20px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); text-align: center; text-wrap: balance; }
+.vacio strong { display: block; color: var(--ink); font: 650 17px var(--f-display); margin-bottom: 4px; }
+.grupo:not(:has(#lista > .fila)) .vacio { display: block; }
+
+/* Ruta: la numeración la hace CSS con un contador */
+#lista { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; position: relative; counter-reset: parada; }
+#lista::before { content: ""; position: absolute; left: 21px; top: 30px; bottom: 30px; width: 2px; background: var(--line); border-radius: 2px; }
+#lista:has(.fila:only-child)::before { display: none; }
+#lista > .fila { counter-increment: parada; }
+.num::before { content: counter(parada); }
+.fila { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: start; position: relative; z-index: 1; --p: var(--media); --pbg: var(--media-bg); }
+.fila[data-p="alta"] { --p: var(--alta); --pbg: var(--alta-bg); }
+.fila[data-p="baja"] { --p: var(--baja); --pbg: var(--baja-bg); }
+.fila.arrastrando { z-index: 5; }
+.fila.arrastrando .card { box-shadow: var(--shadow); border-color: var(--accent); }
+.parada { display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 12px; }
+.num { width: 30px; height: 30px; border-radius: 50%; background: var(--bg); border: 2px solid var(--p); display: grid; place-items: center; font: 600 13px var(--f-mono); }
+.grip { width: 28px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 6px; background: var(--bg); color: var(--muted); cursor: grab; touch-action: none; }
+.grip:hover { color: var(--ink); background: var(--soft); }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px 14px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
+.cab-tarea { display: flex; align-items: center; gap: 10px; }
+.hecha { width: 20px; height: 20px; margin: 0; flex: none; accent-color: var(--accent); cursor: pointer; }
+.titulo { flex: 1; min-width: 0; border: 0; background: transparent; font: 600 17px/1.25 var(--f-display); padding: 4px 6px; margin-left: -6px; border-radius: 6px; text-overflow: ellipsis; }
+.titulo:hover, .proyecto:hover { background: var(--soft); }
+.del { flex: none; border: 0; background: none; font-size: 12px; color: var(--muted); padding: 5px 7px; border-radius: 6px; cursor: pointer; }
+.del .d2 { display: none; }
+.del:hover, .del.armado { color: var(--alta); background: var(--alta-bg); }
+.del.armado { font-weight: 600; }
+.del.armado .d1 { display: none; }
+.del.armado .d2 { display: inline; }
+
+.meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.proyecto { width: 170px; max-width: 100%; height: 30px; padding: 0 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; font-size: 13.5px; color: var(--muted); }
+.proyecto:focus { border-color: var(--accent); color: var(--ink); background: var(--bg); }
+.pill-prio { position: relative; display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 26px 0 11px; border-radius: 999px; background: var(--pbg); color: var(--p); font-weight: 600; font-size: 13px; }
+.pill-prio .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--p); }
+.pill-prio select { appearance: none; -webkit-appearance: none; border: 0; background: transparent; color: inherit; font-weight: 600; font-size: 13px; padding: 0; cursor: pointer; }
+.pill-prio select option { color: var(--ink); background: var(--surface); }
+.pill-prio::after { content: ""; position: absolute; right: 11px; top: 50%; width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-70%) rotate(45deg); pointer-events: none; }
+.entrega { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fecha { height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font: 500 13px var(--f-mono); }
+.estado { font: 500 12px var(--f-mono); padding: 4px 8px; border-radius: 6px; background: var(--soft); color: var(--muted); }
+.estado.est-venc { background: var(--alta-bg); color: var(--alta); font-weight: 600; }
+.estado.est-pronto { background: var(--media-bg); color: var(--media); font-weight: 600; }
+
+.falta { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.falta-cab { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.rot { font: 600 11px var(--f-body); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.prog-txt { font: 500 12px var(--f-mono); color: var(--muted); }
+.prog { height: 5px; border-radius: 99px; background: var(--soft); overflow: hidden; }
+.prog i { display: block; height: 100%; width: var(--avance, 0%); background: var(--accent); border-radius: 99px; transition: width .25s ease; }
+.prog.completo i { background: var(--ok); }
+.falta:not(:has(.paso)) .prog { display: none; }
+.pasos { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; }
+.paso { display: flex; align-items: center; gap: 8px; }
+.paso-ok { width: 17px; height: 17px; margin: 0; flex: none; accent-color: var(--accent); cursor: pointer; }
+.paso-t { flex: 1; min-width: 0; border: 0; background: transparent; padding: 5px 6px; border-radius: 6px; }
+.paso-t:hover { background: var(--soft); }
+.paso:has(.paso-ok:checked) .paso-t { color: var(--muted); text-decoration: line-through; }
+.quitar { flex: none; width: 26px; height: 26px; border: 0; border-radius: 6px; background: none; color: var(--muted); font-size: 17px; line-height: 1; cursor: pointer; }
+.quitar:hover { color: var(--alta); background: var(--alta-bg); }
+.nuevo-paso { width: 100%; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; background: transparent; font-size: 14px; }
+.nuevo-paso:focus { border-style: solid; border-color: var(--accent); background: var(--bg); }
+.nuevo-paso::placeholder, .campo input::placeholder, .titulo::placeholder { color: var(--muted); opacity: .8; }
+
+/* Hechas: las mismas tarjetas, en versión compacta */
+#hechas { border-top: 1px solid var(--line); padding-top: 14px; }
+#hechas:not(:has(.fila)) { display: none; }
+#hechas summary { cursor: pointer; font: 650 16px var(--f-display); }
+#hechas summary .n { font: 500 13px var(--f-mono); color: var(--muted); margin-left: 6px; }
+#lista-hechas { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 6px; }
+#lista-hechas .fila { display: block; }
+#lista-hechas .parada, #lista-hechas .pill-prio, #lista-hechas .entrega, #lista-hechas .falta { display: none; }
+#lista-hechas .card { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 6px 10px; }
+#lista-hechas .cab-tarea { flex: 1 1 260px; }
+#lista-hechas .titulo { text-decoration: line-through; color: var(--muted); font-size: 15px; }
+
+/* Aviso */
+.aviso { position: fixed; left: 0; right: 0; bottom: 0; display: flex; justify-content: center; padding: 0 max(16px, env(safe-area-inset-right, 0px)) calc(16px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); pointer-events: none; z-index: 20; }
+.aviso-in { pointer-events: auto; display: flex; align-items: center; gap: 14px; padding: 10px 14px; border-radius: 10px; background: var(--ink); color: var(--bg); font-size: 14px; box-shadow: var(--shadow); }
+.aviso-in button { border: 0; background: none; color: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; padding: 2px 4px; }
+
+@media (max-width: 520px) {
+  .fila { grid-template-columns: 36px minmax(0, 1fr); gap: 8px; }
+  #lista::before { left: 17px; }
+  .num { width: 28px; height: 28px; }
+  .card { padding: 12px; }
+  .proyecto { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .prog i { transition: none; }
+}
+</style>
+
+<script type="text/hyperscript">
+-- ---------- utilidades ----------
+def hoyMs()
+  make a Date called d
+  return d.setHours(0, 0, 0, 0)
+end
+
+def esOscuro()
+  set a to document.documentElement.getAttribute('data-theme')
+  if a is 'dark'
+    return true
+  end
+  if a is 'light'
+    return false
+  end
+  return window.matchMedia('(prefers-color-scheme: dark)').matches
+end
+
+def pintarTema()
+  if esOscuro()
+    put 'Modo claro' into #tema
+  else
+    put 'Modo oscuro' into #tema
+  end
+end
+
+-- ---------- avisos con deshacer ----------
+def aviso(msg, undo)
+  put msg into #aviso-txt
+  set #aviso-undo.hidden to not undo
+  set #aviso.hidden to false
+  increment $avisoN
+  send avisoNuevo(n: $avisoN) to #aviso
+end
+
+def snap()
+  set $snapP to #lista.innerHTML
+  set $snapH to #lista-hechas.innerHTML
+end
+
+def deshacer()
+  if no $snapP
+    exit
+  end
+  put $snapP into #lista
+  put $snapH into #lista-hechas
+  remove .armado from <.armado/>
+  call refrescarTodo()
+  call guardar()
+  set #aviso.hidden to true
+end
+
+-- ---------- estado de cada tarjeta ----------
+def refrescar(card)
+  set pasos to card.querySelectorAll('.paso').length
+  set hechos to card.querySelectorAll('.paso-ok:checked').length
+  set barra to card.querySelector('.prog')
+  set txt to card.querySelector('.prog-txt')
+  if pasos is 0
+    set txt.textContent to 'Sin pasos todavía'
+  else
+    set txt.textContent to hechos + ' de ' + pasos
+    call barra.style.setProperty('--avance', ((hechos * 100) / pasos) + '%')
+    if hechos is pasos
+      add .completo to barra
+    else
+      remove .completo from barra
+    end
+  end
+
+  set f to card.querySelector('.fecha').value
+  set e to card.querySelector('.estado')
+  remove .est-venc from e
+  remove .est-pronto from e
+  if f is ''
+    set e.textContent to 'Sin fecha'
+    call card.removeAttribute('data-dias')
+  else
+    set n to Math.round((Date.parse(f + 'T00:00:00') - hoyMs()) / 86400000)
+    call card.setAttribute('data-dias', n)
+    set t to 'En ' + n + ' días'
+    if n <= 3
+      add .est-pronto to e
+    end
+    if n is 1
+      set t to 'Vence mañana'
+    end
+    if n is 0
+      set t to 'Vence hoy'
+    end
+    if n is -1
+      set t to 'Venció ayer'
+    end
+    if n < -1
+      set t to 'Venció hace ' + (0 - n) + ' días'
+    end
+    if n < 0
+      remove .est-pronto from e
+      add .est-venc to e
+    end
+    set e.textContent to t
+  end
+end
+
+def refrescarTodo()
+  for c in Array.from(#lista.querySelectorAll('.fila'))
+    call refrescar(c)
+  end
+  for c in Array.from(#lista-hechas.querySelectorAll('.fila'))
+    call refrescar(c)
+  end
+  for p in Array.from(document.querySelectorAll('.proyecto'))
+    call agregarProyecto(p.value)
+  end
+end
+
+def resumen()
+  set filas to Array.from(#lista.querySelectorAll('.fila'))
+  set n to filas.length
+  set s to ' pendientes'
+  if n is 1
+    set s to ' pendiente'
+  end
+  put n + s into #r-total
+  put n into #cuenta
+  put #lista-hechas.children.length into #n-hechas
+
+  set altas to #lista.querySelectorAll('.fila[data-p="alta"]').length
+  if altas > 0
+    put altas + ' de prioridad alta' into #r-alta
+  else
+    put '' into #r-alta
+  end
+
+  set venc to #lista.querySelectorAll('.est-venc').length
+  set v to ' vencidas'
+  if venc is 1
+    set v to ' vencida'
+  end
+  if venc > 0
+    put venc + v into #r-venc
+  else
+    put '' into #r-venc
+  end
+
+  set prox to null
+  for c in filas
+    set d to c.getAttribute('data-dias')
+    if d is not null
+      if Number(d) >= 0
+        if prox is null
+          set prox to c
+        end
+        if Number(d) < Number(prox.getAttribute('data-dias'))
+          set prox to c
+        end
+      end
+    end
+  end
+  if prox
+    make a Date from (Date.parse(prox.querySelector('.fecha').value + 'T00:00:00')) called fecha
+    put 'Próxima entrega: ' + fecha.toLocaleDateString('es-DO', {weekday: 'short', day: 'numeric', month: 'short'}) into #r-prox
+  else
+    put '' into #r-prox
+  end
+end
+
+def guardar()
+  call resumen()
+  call localStorage.setItem('itinerario-htmx-p', #lista.innerHTML)
+  call localStorage.setItem('itinerario-htmx-h', #lista-hechas.innerHTML)
+catch e
+  log e
+end
+
+-- lectura y escritura del almacenamiento del navegador; si está bloqueado, la página sigue funcionando
+def restaurar()
+  set guardado to localStorage.getItem('itinerario-tema')
+  if guardado is 'dark' or guardado is 'light'
+    call document.documentElement.setAttribute('data-theme', guardado)
+  end
+  set p to localStorage.getItem('itinerario-htmx-p')
+  if p is not null
+    put p into #lista
+  end
+  set h to localStorage.getItem('itinerario-htmx-h')
+  if h is not null
+    put h into #lista-hechas
+  end
+catch e
+  log e
+end
+
+def guardarTema(v)
+  call document.documentElement.setAttribute('data-theme', v)
+  call localStorage.setItem('itinerario-tema', v)
+catch e
+  log e
+end
+
+def agregarProyecto(v)
+  if v is ''
+    exit
+  end
+  for o in Array.from(#proyectos.options)
+    if o.value is v
+      exit
+    end
+  end
+  set op to document.createElement('option')
+  set op.value to v
+  call #proyectos.appendChild(op)
+end
+
+-- ---------- htmx: pide un fragmento al propio documento ----------
+def cargar(plantilla, destino)
+  repeat while $cargando
+    wait 20ms
+  end
+  set $cargando to true
+  call destino.setAttribute('data-activo', '')
+  call #cargador.setAttribute('hx-select', '#' + plantilla + ' > *')
+  send cargar to #cargador
+  wait for htmx:afterSwap or htmx:sendError or htmx:responseError or htmx:timeout from #app
+  set ev to it
+  if ev.type is not 'htmx:afterSwap'
+    -- respaldo: si la página no puede pedirse a sí misma, copia la plantilla que ya está en pantalla
+    call destino.insertAdjacentHTML('beforeend', document.getElementById(plantilla).innerHTML)
+  end
+  call destino.removeAttribute('data-activo')
+  set $cargando to false
+end
+
+def fijar(card, sel, valor)
+  set x to card.querySelector(sel)
+  set x.value to valor
+  call x.setAttribute('value', valor)
+end
+
+def fijarPrioridad(card, prio)
+  set s to card.querySelector('.prioridad')
+  set s.value to prio
+  for o in Array.from(s.options)
+    if o.value is prio
+      call o.setAttribute('selected', '')
+    else
+      call o.removeAttribute('selected')
+    end
+  end
+  call card.setAttribute('data-p', prio)
+end
+
+def agregarPaso(el)
+  set card to el.closest('.fila')
+  set ul to card.querySelector('.pasos')
+  set texto to el.value.trim()
+  set el.value to ''
+  call cargar('tpl-paso', ul)
+  set li to ul.lastElementChild
+  call fijar(li, '.paso-t', texto)
+  call refrescar(card)
+  call guardar()
+end
+
+-- ---------- orden ----------
+def ordenar(modo)
+  call snap()
+  set filas to Array.from(#lista.children)
+  set claves to []
+  set i to 0
+  for f in filas
+    set fecha to f.querySelector('.fecha').value
+    if fecha is ''
+      set fecha to '9999-99-99'
+    end
+    set p to '1'
+    if f.getAttribute('data-p') is 'alta'
+      set p to '0'
+    end
+    if f.getAttribute('data-p') is 'baja'
+      set p to '2'
+    end
+    set idx to ('000' + i)
+    set idx to idx.substring(idx.length - 3)
+    if modo is 'fecha'
+      call claves.push(fecha + p + idx)
+    else
+      call claves.push(p + fecha + idx)
+    end
+    increment i
+  end
+  call claves.sort()
+  for k in claves
+    call #lista.appendChild(filas[Number(k.substring(k.length - 3))])
+  end
+  call guardar()
+  if modo is 'fecha'
+    call aviso('Ordenado por fecha de entrega.', true)
+  else
+    call aviso('Ordenado por prioridad.', true)
+  end
+end
+
+-- ---------- comportamiento de la página ----------
+behavior Itinerario
+  init
+    set $avisoN to 0
+    set $cargando to false
+    make a Date called ahora
+    set t to ahora.toLocaleDateString('es-DO', {weekday: 'long', day: 'numeric', month: 'long'})
+    put 'Hoy · ' + t.charAt(0).toUpperCase() + t.substring(1) into #hoy
+    call restaurar()
+    call pintarTema()
+    remove .armado from <.armado/>
+    call refrescarTodo()
+    call resumen()
+    add .listo to me
+
+  on click from #tema
+    if esOscuro()
+      call guardarTema('light')
+    else
+      call guardarTema('dark')
+    end
+    call pintarTema()
+
+  on click from #ord-fecha
+    call ordenar('fecha')
+
+  on click from #ord-prio
+    call ordenar('prio')
+
+  on click from #aviso-undo
+    call deshacer()
+
+  -- el aviso se oculta solo a los 6 s, sin bloquear nada más
+  on every avisoNuevo(n) from #aviso
+    wait 6s
+    if $avisoN is n
+      set #aviso.hidden to true
+    end
+
+  on every click
+    set t to event.target
+    set del to t.closest('.del')
+    if del
+      set card to del.closest('.fila')
+      if del matches .armado
+        call snap()
+        call card.remove()
+        call guardar()
+        call aviso('Tarea eliminada.', true)
+      else
+        add .armado to del
+        wait 3s
+        remove .armado from del
+      end
+      exit
+    end
+    set quitar to t.closest('.quitar')
+    if quitar
+      set card to quitar.closest('.fila')
+      call quitar.closest('.paso').remove()
+      call refrescar(card)
+      call guardar()
+    end
+
+  -- lo escrito se refleja en los atributos del HTML, que es lo que se guarda
+  on every input or change
+    set el to event.target
+    set card to el.closest('.fila')
+    if no card
+      exit
+    end
+    if el matches .nuevo-paso
+      exit
+    end
+    set tipo to el.getAttribute('type')
+    if tipo is 'checkbox'
+      if el.checked
+        call el.setAttribute('checked', '')
+      else
+        call el.removeAttribute('checked')
+      end
+    end
+    if tipo is 'text' or tipo is 'date'
+      if el matches .titulo and el.value.trim() is ''
+        exit
+      end
+      call el.setAttribute('value', el.value)
+    end
+    if el matches .prioridad
+      call fijarPrioridad(card, el.value)
+    end
+    if el matches .proyecto
+      call agregarProyecto(el.value.trim())
+    end
+    call refrescar(card)
+    call guardar()
+
+  on every change
+    set el to event.target
+    if el matches .titulo and el.value.trim() is ''
+      set el.value to el.getAttribute('value')
+      exit
+    end
+    if el matches .hecha
+      set card to el.closest('.fila')
+      call snap()
+      if el.checked
+        call #lista-hechas.prepend(card)
+        call aviso('Tarea hecha. La encuentras en Hechas.', true)
+      else
+        call #lista.appendChild(card)
+      end
+      call guardar()
+    end
+
+  on every keydown
+    set el to event.target
+    if el matches .nuevo-paso and event.key is 'Enter'
+      halt the event
+      if el.value.trim() is ''
+        exit
+      end
+      call agregarPaso(el)
+      exit
+    end
+    if (el matches .titulo or el matches .proyecto or el matches .paso-t) and event.key is 'Enter'
+      halt the event
+      call el.blur()
+      exit
+    end
+    if el matches .grip and (event.key is 'ArrowUp' or event.key is 'ArrowDown')
+      halt the event
+      set card to el.closest('.fila')
+      if event.key is 'ArrowUp'
+        set otro to card.previousElementSibling
+        if otro
+          call card.parentNode.insertBefore(card, otro)
+        end
+      else
+        set otro to card.nextElementSibling
+        if otro
+          call card.parentNode.insertBefore(otro, card)
+        end
+      end
+      call el.focus()
+      call guardar()
+    end
+
+  -- arrastrar con el puntero (ratón o dedo): la tarjeta se reubica según dónde esté el puntero
+  on every pointerdown
+    set grip to event.target.closest('.grip')
+    if no grip
+      exit
+    end
+    halt the event
+    set fila to grip.closest('.fila')
+    set lista to fila.parentNode
+    call me.setPointerCapture(event.pointerId)
+    add .arrastrando to fila
+    add .moviendo to me
+    set fin to false
+    repeat until fin
+      wait for pointermove(clientY) or pointerup or pointercancel from document
+      set ev to it
+      if ev.type is 'pointermove'
+        if clientY < 70
+          call window.scrollBy(0, -14)
+        end
+        if clientY > window.innerHeight - 70
+          call window.scrollBy(0, 14)
+        end
+        set despues to null
+        for f in Array.from(lista.children)
+          if f is not fila and despues is null
+            set r to f.getBoundingClientRect()
+            if clientY < (r.top + (r.height / 2))
+              set despues to f
+            end
+          end
+        end
+        if despues is null
+          call lista.appendChild(fila)
+        else
+          if despues.previousElementSibling is not fila
+            call lista.insertBefore(fila, despues)
+          end
+        end
+      else
+        set fin to true
+      end
+    end
+    remove .arrastrando from fila
+    remove .moviendo from me
+    call guardar()
+
+  on submit from #nueva
+    halt the event
+    set titulo to #n-titulo.value.trim()
+    if titulo is ''
+      call #n-titulo.focus()
+      exit
+    end
+    call snap()
+    call cargar('tpl-tarea', #lista)
+    set card to #lista.lastElementChild
+    call fijar(card, '.titulo', titulo)
+    call fijar(card, '.proyecto', #n-proyecto.value.trim())
+    call fijar(card, '.fecha', #n-fecha.value)
+    call fijarPrioridad(card, #n-prioridad.value)
+    call agregarProyecto(#n-proyecto.value.trim())
+    set #n-titulo.value to ''
+    set #n-fecha.value to ''
+    call refrescar(card)
+    call guardar()
+    call card.querySelector('.nuevo-paso').focus()
+end
+</script>
+
+<main class="pagina" id="app" _="install Itinerario">
+  <header class="cab">
+    <div class="cab-top">
+      <p class="hoy" id="hoy"></p>
+      <button type="button" class="tema" id="tema">Modo oscuro</button>
+    </div>
+    <h1>Itinerario de trabajo</h1>
+    <p class="resumen" aria-live="polite">
+      <span id="r-total"></span><span id="r-alta" class="r-alta"></span><span id="r-venc" class="r-venc"></span><span id="r-prox"></span>
+    </p>
+    <p class="nota">Tus pendientes se guardan en este navegador.</p>
+  </header>
+
+  <form class="nueva grupo" id="nueva" autocomplete="off">
+    <label class="campo c-titulo"><span>Tarea</span><input id="n-titulo" type="text" placeholder="¿Qué hay que entregar?" maxlength="140"></label>
+    <label class="campo"><span>Proyecto</span><input id="n-proyecto" type="text" list="proyectos" placeholder="Opcional" maxlength="60"></label>
+    <label class="campo"><span>Prioridad</span>
+      <select id="n-prioridad">
+        <option value="alta">Alta</option>
+        <option value="media" selected>Media</option>
+        <option value="baja">Baja</option>
+      </select>
+    </label>
+    <label class="campo"><span>Entrega</span><input id="n-fecha" type="date"></label>
+    <button class="btn" type="submit">Agregar</button>
+  </form>
+  <datalist id="proyectos"></datalist>
+
+  <section class="grupo" aria-labelledby="t-pend" style="display:grid;grid-template-columns:minmax(0,1fr);gap:14px">
+    <div class="barra">
+      <h2 id="t-pend">Pendientes<span class="n" id="cuenta"></span></h2>
+      <div class="orden">
+        <span>Ordenar por</span>
+        <button type="button" class="chip-btn" id="ord-fecha">Fecha de entrega</button>
+        <button type="button" class="chip-btn" id="ord-prio">Prioridad</button>
+      </div>
+    </div>
+    <div class="vacio"><strong>No hay pendientes</strong>Escribe arriba la primera tarea con su prioridad y fecha de entrega. Después agrega los pasos que faltan para terminarla y arrastra las tarjetas para ordenar tu ruta.</div>
+    <ol id="lista"><li class="fila" data-p="alta">
+      <div class="parada"><span class="num"></span>
+        <button type="button" class="grip" aria-label="Reordenar: arrastra, o usa las flechas arriba y abajo" title="Arrastra para reordenar"><svg width="12" height="16" viewBox="0 0 12 16" aria-hidden="true" fill="currentColor"><circle cx="3.5" cy="3" r="1.4"/><circle cx="8.5" cy="3" r="1.4"/><circle cx="3.5" cy="8" r="1.4"/><circle cx="8.5" cy="8" r="1.4"/><circle cx="3.5" cy="13" r="1.4"/><circle cx="8.5" cy="13" r="1.4"/></svg></button>
+      </div>
+      <article class="card">
+        <div class="cab-tarea">
+          <input type="checkbox" class="hecha" aria-label="Marcar tarea como hecha" title="Marcar como hecha">
+          <input type="text" class="titulo" value="Odoo" aria-label="Nombre de la tarea" placeholder="Nombre de la tarea" maxlength="140">
+          <button type="button" class="del"><span class="d1">Eliminar</span><span class="d2">Confirmar</span></button>
+        </div>
+        <div class="meta">
+          <input type="text" class="proyecto" list="proyectos" value="Contabilidad" aria-label="Proyecto" placeholder="Sin proyecto" maxlength="60">
+          <label class="pill-prio"><i class="dot"></i><select class="prioridad" aria-label="Prioridad"><option value="alta" selected>Alta</option><option value="media">Media</option><option value="baja">Baja</option></select></label>
+          <div class="entrega"><input type="date" class="fecha" value="" aria-label="Fecha de entrega"><span class="estado"></span></div>
+        </div>
+        <div class="falta">
+          <div class="falta-cab"><span class="rot">Qué falta</span><span class="prog-txt"></span></div>
+          <div class="prog" aria-hidden="true"><i></i></div>
+          <ul class="pasos"><li class="paso"><input type="checkbox" class="paso-ok" aria-label="Paso completado"><input type="text" class="paso-t" value="Validar la plantillas de Facturas" aria-label="Paso pendiente"><button type="button" class="quitar" aria-label="Quitar paso">×</button></li><li class="paso"><input type="checkbox" class="paso-ok" aria-label="Paso completado"><input type="text" class="paso-t" value="Validar la plantillas de Recibos" aria-label="Paso pendiente"><button type="button" class="quitar" aria-label="Quitar paso">×</button></li><li class="paso"><input type="checkbox" class="paso-ok" aria-label="Paso completado"><input type="text" class="paso-t" value="Validar la Facturación Electrónica" aria-label="Paso pendiente"><button type="button" class="quitar" aria-label="Quitar paso">×</button></li></ul>
+          <input type="text" class="nuevo-paso" placeholder="Agregar lo que falta y presionar Enter" aria-label="Agregar un paso pendiente" maxlength="160">
+        </div>
+      </article>
+    </li>
+<li class="fila" data-p="media">
+      <div class="parada"><span class="num"></span>
+        <button type="button" class="grip" aria-label="Reordenar: arrastra, o usa las flechas arriba y abajo" title="Arrastra para reordenar"><svg width="12" height="16" viewBox="0 0 12 16" aria-hidden="true" fill="currentColor"><circle cx="3.5" cy="3" r="1.4"/><circle cx="8.5" cy="3" r="1.4"/><circle cx="3.5" cy="8" r="1.4"/><circle cx="8.5" cy="8" r="1.4"/><circle cx="3.5" cy="13" r="1.4"/><circle cx="8.5" cy="13" r="1.4"/></svg></button>
+      </div>
+      <article class="card">
+        <div class="cab-tarea">
+          <input type="checkbox" class="hecha" aria-label="Marcar tarea como hecha" title="Marcar como hecha">
+          <input type="text" class="titulo" value="Reforzar la seguridad de los despachos y cierres con IA y validación presencial" aria-label="Nombre de la tarea" placeholder="Nombre de la tarea" maxlength="140">
+          <button type="button" class="del"><span class="d1">Eliminar</span><span class="d2">Confirmar</span></button>
+        </div>
+        <div class="meta">
+          <input type="text" class="proyecto" list="proyectos" value="Precintos" aria-label="Proyecto" placeholder="Sin proyecto" maxlength="60">
+          <label class="pill-prio"><i class="dot"></i><select class="prioridad" aria-label="Prioridad"><option value="alta">Alta</option><option value="media" selected>Media</option><option value="baja">Baja</option></select></label>
+          <div class="entrega"><input type="date" class="fecha" value="2026-11-06" aria-label="Fecha de entrega"><span class="estado"></span></div>
+        </div>
+        <div class="falta">
+          <div class="falta-cab"><span class="rot">Qué falta</span><span class="prog-txt"></span></div>
+          <div class="prog" aria-hidden="true"><i></i></div>
+          <ul class="pasos"><li class="paso"><input type="checkbox" class="paso-ok" aria-label="Paso completado"><input type="text" class="paso-t" value="Uitlizar Face ID para el envio de Cierre" aria-label="Paso pendiente"><button type="button" class="quitar" aria-label="Quitar paso">×</button></li><li class="paso"><input type="checkbox" class="paso-ok" aria-label="Paso completado"><input type="text" class="paso-t" value="Utilizar Face ID del agente aduanal para solicitar liberación" aria-label="Paso pendiente"><button type="button" class="quitar" aria-label="Quitar paso">×</button></li></ul>
+          <input type="text" class="nuevo-paso" placeholder="Agregar lo que falta y presionar Enter" aria-label="Agregar un paso pendiente" maxlength="160">
+        </div>
+      </article>
+    </li>
+<li class="fila" data-p="media">
+      <div class="parada"><span class="num"></span>
+        <button type="button" class="grip" aria-label="Reordenar: arrastra, o usa las flechas arriba y abajo" title="Arrastra para reordenar"><svg width="12" height="16" viewBox="0 0 12 16" aria-hidden="true" fill="currentColor"><circle cx="3.5" cy="3" r="1.4"/><circle cx="8.5" cy="3" r="1.4"/><circle cx="3.5" cy="8" r="1.4"/><circle cx="8.5" cy="8" r="1.4"/><circle cx="3.5" cy="13" r="1.4"/><circle cx="8.5" cy="13" r="1.4"/></svg></button>
+      </div>
+      <article class="card">
+        <div class="cab-tarea">
+          <input type="checkbox" class="hecha" aria-label="Marcar tarea como hecha" title="Marcar como hecha">
+          <input type="text" class="titulo" value="Autenticar los carnet de los agentes de aduanas y choferes." aria-label="Nombre de la tarea" placeholder="Nombre de la tarea" maxlength="140">
+          <button type="button" class="del"><span class="d1">Eliminar</span><span class="d2">Confirmar</span></button>
+        </div>
+        <div class="meta">
+          <input type="text" class="proyecto" list="proyectos" value="Precintos" aria-label="Proyecto" placeholder="Sin proyecto" maxlength="60">
+          <label class="pill-prio"><i class="dot"></i><select class="prioridad" aria-label="Prioridad"><option value="alta">Alta</option><option value="media" selected>Media</option><option value="baja">Baja</option></select></label>
+          <div class="entrega"><input type="date" class="fecha" value="" aria-label="Fecha de entrega"><span class="estado"></span></div>
+        </div>
+        <div class="falta">
+          <div class="falta-cab"><span class="rot">Qué falta</span><span class="prog-txt"></span></div>
+          <div class="prog" aria-hidden="true"><i></i></div>
+          <ul class="pasos"><li class="paso"><input type="checkbox" class="paso-ok" aria-label="Paso completado"><input type="text" class="paso-t" value="Enviar documentos a la RNTT. Ver correo Solicitud de reactivación de acceso y adquisición de consumos para consultas de transportistas" aria-label="Paso pendiente"><button type="button" class="quitar" aria-label="Quitar paso">×</button></li></ul>
+          <input type="text" class="nuevo-paso" placeholder="Agregar lo que falta y presionar Enter" aria-label="Agregar un paso pendiente" maxlength="160">
+        </div>
+      </article>
+    </li>
+<li class="fila" data-p="media">
+      <div class="parada"><span class="num"></span>
+        <button type="button" class="grip" aria-label="Reordenar: arrastra, o usa las flechas arriba y abajo" title="Arrastra para reordenar"><svg width="12" height="16" viewBox="0 0 12 16" aria-hidden="true" fill="currentColor"><circle cx="3.5" cy="3" r="1.4"/><circle cx="8.5" cy="3" r="1.4"/><circle cx="3.5" cy="8" r="1.4"/><circle cx="8.5" cy="8" r="1.4"/><circle cx="3.5" cy="13" r="1.4"/><circle cx="8.5" cy="13" r="1.4"/></svg></button>
+      </div>
+      <article class="card">
+        <div class="cab-tarea">
+          <input type="checkbox" class="hecha" aria-label="Marcar tarea como hecha" title="Marcar como hecha">
+          <input type="text" class="titulo" value="Investigar alternativa para los correos, nube, ofimatica" aria-label="Nombre de la tarea" placeholder="Nombre de la tarea" maxlength="140">
+          <button type="button" class="del"><span class="d1">Eliminar</span><span class="d2">Confirmar</span></button>
+        </div>
+        <div class="meta">
+          <input type="text" class="proyecto" list="proyectos" value="TI" aria-label="Proyecto" placeholder="Sin proyecto" maxlength="60">
+          <label class="pill-prio"><i class="dot"></i><select class="prioridad" aria-label="Prioridad"><option value="alta">Alta</option><option value="media" selected>Media</option><option value="baja">Baja</option></select></label>
+          <div class="entrega"><input type="date" class="fecha" value="" aria-label="Fecha de entrega"><span class="estado"></span></div>
+        </div>
+        <div class="falta">
+          <div class="falta-cab"><span class="rot">Qué falta</span><span class="prog-txt"></span></div>
+          <div class="prog" aria-hidden="true"><i></i></div>
+          <ul class="pasos"><li class="paso"><input type="checkbox" class="paso-ok" aria-label="Paso completado"><input type="text" class="paso-t" value="Ver Zoho Workspace" aria-label="Paso pendiente"><button type="button" class="quitar" aria-label="Quitar paso">×</button></li><li class="paso"><input type="checkbox" class="paso-ok" aria-label="Paso completado"><input type="text" class="paso-t" value="Ver Proton Workspace" aria-label="Paso pendiente"><button type="button" class="quitar" aria-label="Quitar paso">×</button></li><li class="paso"><input type="checkbox" class="paso-ok" aria-label="Paso completado"><input type="text" class="paso-t" value="Ver Cloudflare" aria-label="Paso pendiente"><button type="button" class="quitar" aria-label="Quitar paso">×</button></li></ul>
+          <input type="text" class="nuevo-paso" placeholder="Agregar lo que falta y presionar Enter" aria-label="Agregar un paso pendiente" maxlength="160">
+        </div>
+      </article>
+    </li>
+<li class="fila" data-p="media">
+      <div class="parada"><span class="num"></span>
+        <button type="button" class="grip" aria-label="Reordenar: arrastra, o usa las flechas arriba y abajo" title="Arrastra para reordenar"><svg width="12" height="16" viewBox="0 0 12 16" aria-hidden="true" fill="currentColor"><circle cx="3.5" cy="3" r="1.4"/><circle cx="8.5" cy="3" r="1.4"/><circle cx="3.5" cy="8" r="1.4"/><circle cx="8.5" cy="8" r="1.4"/><circle cx="3.5" cy="13" r="1.4"/><circle cx="8.5" cy="13" r="1.4"/></svg></button>
+      </div>
+      <article class="card">
+        <div class="cab-tarea">
+          <input type="checkbox" class="hecha" aria-label="Marcar tarea como hecha" title="Marcar como hecha">
+          <input type="text" class="titulo" value="Ubiqo" aria-label="Nombre de la tarea" placeholder="Nombre de la tarea" maxlength="140">
+          <button type="button" class="del"><span class="d1">Eliminar</span><span class="d2">Confirmar</span></button>
+        </div>
+        <div class="meta">
+          <input type="text" class="proyecto" list="proyectos" value="Proyectos" aria-label="Proyecto" placeholder="Sin proyecto" maxlength="60">
+          <label class="pill-prio"><i class="dot"></i><select class="prioridad" aria-label="Prioridad"><option value="alta">Alta</option><option value="media" selected>Media</option><option value="baja">Baja</option></select></label>
+          <div class="entrega"><input type="date" class="fecha" value="" aria-label="Fecha de entrega"><span class="estado"></span></div>
+        </div>
+        <div class="falta">
+          <div class="falta-cab"><span class="rot">Qué falta</span><span class="prog-txt"></span></div>
+          <div class="prog" aria-hidden="true"><i></i></div>
+          <ul class="pasos"><li class="paso"><input type="checkbox" class="paso-ok" aria-label="Paso completado"><input type="text" class="paso-t" value="Implementar Retranslator" aria-label="Paso pendiente"><button type="button" class="quitar" aria-label="Quitar paso">×</button></li><li class="paso"><input type="checkbox" class="paso-ok" aria-label="Paso completado"><input type="text" class="paso-t" value="Desarrollar el Retranslator de comunicación entre Ubiqo y Gurtam" aria-label="Paso pendiente"><button type="button" class="quitar" aria-label="Quitar paso">×</button></li></ul>
+          <input type="text" class="nuevo-paso" placeholder="Agregar lo que falta y presionar Enter" aria-label="Agregar un paso pendiente" maxlength="160">
+        </div>
+      </article>
+    </li>
+<li class="fila" data-p="media">
+      <div class="parada"><span class="num"></span>
+        <button type="button" class="grip" aria-label="Reordenar: arrastra, o usa las flechas arriba y abajo" title="Arrastra para reordenar"><svg width="12" height="16" viewBox="0 0 12 16" aria-hidden="true" fill="currentColor"><circle cx="3.5" cy="3" r="1.4"/><circle cx="8.5" cy="3" r="1.4"/><circle cx="3.5" cy="8" r="1.4"/><circle cx="8.5" cy="8" r="1.4"/><circle cx="3.5" cy="13" r="1.4"/><circle cx="8.5" cy="13" r="1.4"/></svg></button>
+      </div>
+      <article class="card">
+        <div class="cab-tarea">
+          <input type="checkbox" class="hecha" aria-label="Marcar tarea como hecha" title="Marcar como hecha">
+          <input type="text" class="titulo" value="JumpCloud" aria-label="Nombre de la tarea" placeholder="Nombre de la tarea" maxlength="140">
+          <button type="button" class="del"><span class="d1">Eliminar</span><span class="d2">Confirmar</span></button>
+        </div>
+        <div class="meta">
+          <input type="text" class="proyecto" list="proyectos" value="JumpCloud" aria-label="Proyecto" placeholder="Sin proyecto" maxlength="60">
+          <label class="pill-prio"><i class="dot"></i><select class="prioridad" aria-label="Prioridad"><option value="alta">Alta</option><option value="media" selected>Media</option><option value="baja">Baja</option></select></label>
+          <div class="entrega"><input type="date" class="fecha" value="" aria-label="Fecha de entrega"><span class="estado"></span></div>
+        </div>
+        <div class="falta">
+          <div class="falta-cab"><span class="rot">Qué falta</span><span class="prog-txt"></span></div>
+          <div class="prog" aria-hidden="true"><i></i></div>
+          <ul class="pasos"><li class="paso"><input type="checkbox" class="paso-ok" aria-label="Paso completado"><input type="text" class="paso-t" value="Probar enrolamiento con dispositivos móviles" aria-label="Paso pendiente"><button type="button" class="quitar" aria-label="Quitar paso">×</button></li><li class="paso"><input type="checkbox" class="paso-ok" aria-label="Paso completado"><input type="text" class="paso-t" value="Probar el SSO" aria-label="Paso pendiente"><button type="button" class="quitar" aria-label="Quitar paso">×</button></li></ul>
+          <input type="text" class="nuevo-paso" placeholder="Agregar lo que falta y presionar Enter" aria-label="Agregar un paso pendiente" maxlength="160">
+        </div>
+      </article>
+    </li></ol>
+  </section>
+
+  <details class="grupo" id="hechas">
+    <summary>Hechas<span class="n" id="n-hechas"></span></summary>
+    <ul id="lista-hechas"></ul>
+  </details>
+</main>
+
+<!-- htmx pide estos fragmentos al propio documento (hx-get + hx-select). -->
+<div id="cargador" hx-get="" hx-trigger="cargar" hx-target="[data-activo]" hx-swap="beforeend ignoreTitle:true" hx-select="#tpl-paso > *" aria-hidden="true"></div>
+
+<div id="plantillas" hidden>
+  <div id="tpl-tarea">
+    <li class="fila" data-p="media">
+      <div class="parada"><span class="num"></span>
+        <button type="button" class="grip" aria-label="Reordenar: arrastra, o usa las flechas arriba y abajo" title="Arrastra para reordenar"><svg width="12" height="16" viewBox="0 0 12 16" aria-hidden="true" fill="currentColor"><circle cx="3.5" cy="3" r="1.4"/><circle cx="8.5" cy="3" r="1.4"/><circle cx="3.5" cy="8" r="1.4"/><circle cx="8.5" cy="8" r="1.4"/><circle cx="3.5" cy="13" r="1.4"/><circle cx="8.5" cy="13" r="1.4"/></svg></button>
+      </div>
+      <article class="card">
+        <div class="cab-tarea">
+          <input type="checkbox" class="hecha" aria-label="Marcar tarea como hecha" title="Marcar como hecha">
+          <input type="text" class="titulo" value="" aria-label="Nombre de la tarea" placeholder="Nombre de la tarea" maxlength="140">
+          <button type="button" class="del"><span class="d1">Eliminar</span><span class="d2">Confirmar</span></button>
+        </div>
+        <div class="meta">
+          <input type="text" class="proyecto" list="proyectos" value="" aria-label="Proyecto" placeholder="Sin proyecto" maxlength="60">
+          <label class="pill-prio"><i class="dot"></i><select class="prioridad" aria-label="Prioridad"><option value="alta">Alta</option><option value="media" selected>Media</option><option value="baja">Baja</option></select></label>
+          <div class="entrega"><input type="date" class="fecha" value="" aria-label="Fecha de entrega"><span class="estado"></span></div>
+        </div>
+        <div class="falta">
+          <div class="falta-cab"><span class="rot">Qué falta</span><span class="prog-txt"></span></div>
+          <div class="prog" aria-hidden="true"><i></i></div>
+          <ul class="pasos"></ul>
+          <input type="text" class="nuevo-paso" placeholder="Agregar lo que falta y presionar Enter" aria-label="Agregar un paso pendiente" maxlength="160">
+        </div>
+      </article>
+    </li>
+  </div>
+  <div id="tpl-paso">
+    <li class="paso"><input type="checkbox" class="paso-ok" aria-label="Paso completado"><input type="text" class="paso-t" value="" aria-label="Paso pendiente"><button type="button" class="quitar" aria-label="Quitar paso">×</button></li>
+  </div>
+</div>
+
+<div class="aviso" id="aviso" hidden><div class="aviso-in" role="status"><span id="aviso-txt"></span><button type="button" id="aviso-undo" hidden>Deshacer</button></div></div>
+
+
+</body></html>
