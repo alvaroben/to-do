@@ -92,6 +92,8 @@ button, input, select { font: inherit; color: inherit; }
 .hoy { margin: 0; font: 500 12px var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 .tema { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap; }
 .tema:hover { border-color: var(--accent); color: var(--accent); }
+.tema:disabled { opacity: .6; cursor: progress; }
+.cab-acc { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 h1 { margin: 0; font: 700 clamp(28px, 6vw, 40px)/1.05 var(--f-display); letter-spacing: -.02em; text-wrap: balance; }
 .resumen { margin: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; font: 500 13px var(--f-mono); color: var(--muted); }
 .resumen span:empty { display: none; }
@@ -235,6 +237,7 @@ h2 .n { font: 500 13px var(--f-mono); color: var(--muted); margin-left: 6px; }
     });
   }
   function todas() { return leer('#lista', 0).concat(leer('#lista-hechas', 1)); }
+  window.itiTodas = todas;
 
   function fijar(el, v) { el.value = v; el.setAttribute('value', v); }
   function crear(t) {
@@ -297,6 +300,261 @@ h2 .n { font: 500 13px var(--f-mono); color: var(--muted); margin-left: 6px; }
     clearTimeout(timer);
     timer = setTimeout(enviar, 600);
   };
+})();
+</script>
+
+<script>
+/* Reporte kanban en Excel (Pendiente / En proceso / Hecho).
+   Se arma en el navegador con ExcelJS, que solo se descarga al pulsar el botón. */
+(function () {
+  var EXCELJS = 'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js';
+  var PRIO = { alta: 'Alta', media: 'Media', baja: 'Baja' };
+  var PRIO_COLOR = { alta: 'FFBE3A2E', media: 'FFD99A1E', baja: 'FF3F6482' };
+  var COLS = [
+    { id: 'pendiente', titulo: 'PENDIENTE', color: 'FF586972', fondo: 'FFEEF1F2' },
+    { id: 'proceso', titulo: 'EN PROCESO', color: 'FFD99A1E', fondo: 'FFFBF0DB' },
+    { id: 'hecho', titulo: 'HECHO', color: 'FF2E7D5B', fondo: 'FFE6F3EC' }
+  ];
+  var ANCHO = 54; // caracteres por columna del kanban
+  var cargandoLib = null;
+
+  function cargarLib() {
+    if (window.ExcelJS) return Promise.resolve();
+    if (!cargandoLib) cargandoLib = new Promise(function (ok, mal) {
+      var s = document.createElement('script');
+      s.src = EXCELJS;
+      s.onload = ok;
+      s.onerror = function () { cargandoLib = null; mal(new Error('No se pudo cargar ExcelJS')); };
+      document.head.appendChild(s);
+    });
+    return cargandoLib;
+  }
+
+  function hoyISO() {
+    var d = new Date();
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+  }
+  function fechaLarga(iso) { return iso ? iso.split('-').reverse().join('/') : ''; }
+  function dias(iso) {
+    if (!iso) return null;
+    var hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+    return Math.round((Date.parse(iso + 'T00:00:00') - hoy.getTime()) / 86400000);
+  }
+  function plazo(t) {
+    var n = dias(t.fecha);
+    if (n === null) return '';
+    if (n < -1) return 'venció hace ' + (-n) + ' días';
+    if (n === -1) return 'venció ayer';
+    if (n === 0) return 'vence hoy';
+    if (n === 1) return 'vence mañana';
+    return 'en ' + n + ' días';
+  }
+
+  // Hecho: marcada como hecha, o con todos sus pasos completos. En proceso: al menos un paso hecho.
+  function estadoDe(t) {
+    var total = t.pasos.length, ok = t.pasos.filter(function (p) { return p.ok; }).length;
+    if (t.hecha) return 'hecho';
+    if (total > 0 && ok === total) return 'hecho';
+    if (ok > 0) return 'proceso';
+    return 'pendiente';
+  }
+
+  // Texto con formato de una tarjeta y cuántas líneas ocupa (Excel no ajusta la altura solo).
+  function tarjeta(t, estado) {
+    var rt = [], lineas = 0;
+    var linea = function (txt) { return Math.max(1, Math.ceil(txt.length / (ANCHO * 0.95))); };
+    var add = function (txt, font) { rt.push({ text: txt, font: font }); };
+    var base = { name: 'Calibri', size: 10 };
+
+    add(t.titulo + '\n', { name: 'Calibri', size: 12, bold: true, color: { argb: 'FF15222B' } });
+    lineas += Math.ceil(t.titulo.length / (ANCHO * 0.8));
+
+    var meta = [];
+    if (t.proyecto) meta.push(t.proyecto);
+    meta.push('Prioridad ' + PRIO[t.prioridad]);
+    if (t.fecha) meta.push('Entrega ' + fechaLarga(t.fecha));
+    add(meta.join(' · ') + '\n', Object.assign({ color: { argb: 'FF586972' } }, base));
+    lineas += linea(meta.join(' · '));
+
+    if (t.fecha && estado !== 'hecho' && !t.hecha) {
+      var n = dias(t.fecha);
+      if (n !== null && n < 0) {
+        add('VENCIDA: ' + plazo(t) + '\n', Object.assign({ bold: true, color: { argb: 'FFBE3A2E' } }, base));
+        lineas += 1;
+      }
+    }
+
+    if (t.pasos.length) {
+      var ok = t.pasos.filter(function (p) { return p.ok; }).length;
+      add('Avance: ' + ok + ' de ' + t.pasos.length + ' pasos\n', Object.assign({ bold: true, color: { argb: 'FF1D4ED8' } }, base));
+      lineas += 1;
+      t.pasos.forEach(function (p, i) {
+        var txt = (p.ok ? '☑ ' : '☐ ') + p.t;
+        add(txt + (i < t.pasos.length - 1 ? '\n' : ''),
+          Object.assign({ color: { argb: p.ok ? 'FF2E7D5B' : 'FF15222B' }, strike: p.ok }, base));
+        lineas += linea(txt);
+      });
+    } else {
+      add('Sin pasos registrados', Object.assign({ italic: true, color: { argb: 'FF93A3AB' } }, base));
+      lineas += 1;
+    }
+    return { rt: rt, lineas: lineas };
+  }
+
+  function armar(tareas) {
+    var wb = new ExcelJS.Workbook();
+    wb.creator = 'Itinerario de trabajo';
+    wb.created = new Date();
+    var grupos = { pendiente: [], proceso: [], hecho: [] };
+    tareas.forEach(function (t) { grupos[estadoDe(t)].push(t); });
+
+    // ---- Hoja 1: kanban ----
+    var ws = wb.addWorksheet('Kanban', { views: [{ state: 'frozen', ySplit: 5, showGridLines: false }] });
+    ws.columns = COLS.map(function () { return { width: ANCHO }; });
+
+    ws.mergeCells('A1:C1');
+    var c1 = ws.getCell('A1');
+    c1.value = 'Reporte de trabajo · Kanban';
+    c1.font = { name: 'Calibri', size: 18, bold: true, color: { argb: 'FF15222B' } };
+    c1.alignment = { vertical: 'middle' };
+    ws.getRow(1).height = 32;
+
+    ws.mergeCells('A2:C2');
+    var hoy = new Date().toLocaleDateString('es-DO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    ws.getCell('A2').value = 'Corte al ' + hoy;
+    ws.getCell('A2').font = { name: 'Calibri', size: 11, color: { argb: 'FF586972' } };
+
+    var venc = grupos.pendiente.concat(grupos.proceso).filter(function (t) { var n = dias(t.fecha); return n !== null && n < 0; }).length;
+    ws.mergeCells('A3:C3');
+    ws.getCell('A3').value = 'Total: ' + tareas.length + '   |   Hecho: ' + grupos.hecho.length + '   |   En proceso: ' + grupos.proceso.length +
+      '   |   Pendiente: ' + grupos.pendiente.length + (venc ? '   |   Vencidas: ' + venc : '');
+    ws.getCell('A3').font = { name: 'Calibri', size: 11, bold: true, color: { argb: 'FF15222B' } };
+
+    var cab = ws.getRow(5);
+    cab.height = 26;
+    COLS.forEach(function (c, i) {
+      var cell = cab.getCell(i + 1);
+      cell.value = c.titulo + '  (' + grupos[c.id].length + ')';
+      cell.font = { name: 'Calibri', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: c.color } };
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+    });
+
+    var filas = Math.max(1, grupos.pendiente.length, grupos.proceso.length, grupos.hecho.length);
+    for (var r = 0; r < filas; r++) {
+      var row = ws.getRow(6 + r), alto = 1;
+      COLS.forEach(function (c, i) {
+        var t = grupos[c.id][r], cell = row.getCell(i + 1);
+        cell.alignment = { vertical: 'top', wrapText: true };
+        if (!t) {
+          if (r === 0 && !grupos[c.id].length) {
+            cell.value = 'Sin tareas';
+            cell.font = { name: 'Calibri', size: 10, italic: true, color: { argb: 'FF93A3AB' } };
+          }
+          return;
+        }
+        var k = tarjeta(t, c.id);
+        cell.value = { richText: k.rt };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: c.fondo } };
+        var linea = { style: 'thin', color: { argb: 'FFD3DBDF' } };
+        cell.border = {
+          left: { style: 'thick', color: { argb: PRIO_COLOR[t.prioridad] } },
+          top: linea, right: linea, bottom: { style: 'medium', color: { argb: 'FFFFFFFF' } }
+        };
+        alto = Math.max(alto, k.lineas);
+      });
+      row.height = Math.min(409, alto * 14 + 12);
+    }
+
+    var leyenda = ws.getRow(6 + filas + 1);
+    ws.mergeCells(leyenda.number, 1, leyenda.number, 3);
+    leyenda.getCell(1).value = 'Borde izquierdo de cada tarjeta: rojo = prioridad alta, ámbar = media, azul = baja.   ' +
+      'Hecho = tarea marcada como hecha o con todos sus pasos completos. En proceso = al menos un paso completado.';
+    leyenda.getCell(1).font = { name: 'Calibri', size: 9, italic: true, color: { argb: 'FF586972' } };
+    leyenda.getCell(1).alignment = { wrapText: true, vertical: 'top' };
+    leyenda.height = 28;
+
+    ws.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+
+    // ---- Hoja 2: detalle en tabla (filtrable) ----
+    var wd = wb.addWorksheet('Detalle', { views: [{ state: 'frozen', ySplit: 1 }] });
+    wd.columns = [
+      { header: 'Estado', key: 'estado', width: 14 },
+      { header: 'Tarea', key: 'titulo', width: 48 },
+      { header: 'Proyecto', key: 'proyecto', width: 20 },
+      { header: 'Prioridad', key: 'prio', width: 11 },
+      { header: 'Entrega', key: 'fecha', width: 12 },
+      { header: 'Plazo', key: 'plazo', width: 20 },
+      { header: 'Avance', key: 'avance', width: 10 },
+      { header: 'Pasos hechos', key: 'hechos', width: 50 },
+      { header: 'Pasos pendientes', key: 'faltan', width: 50 }
+    ];
+    var ETQ = { pendiente: 'Pendiente', proceso: 'En proceso', hecho: 'Hecho' };
+    COLS.forEach(function (c) {
+      grupos[c.id].forEach(function (t) {
+        var ok = t.pasos.filter(function (p) { return p.ok; });
+        var no = t.pasos.filter(function (p) { return !p.ok; });
+        var row = wd.addRow({
+          estado: ETQ[c.id], titulo: t.titulo, proyecto: t.proyecto, prio: PRIO[t.prioridad],
+          fecha: t.fecha ? new Date(t.fecha + 'T00:00:00') : '',
+          plazo: c.id === 'hecho' ? '' : plazo(t),
+          avance: t.pasos.length ? ok.length / t.pasos.length : '',
+          hechos: ok.map(function (p) { return '• ' + p.t; }).join('\n'),
+          faltan: no.map(function (p) { return '• ' + p.t; }).join('\n')
+        });
+        row.alignment = { vertical: 'top', wrapText: true };
+        row.getCell('estado').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: c.fondo } };
+        row.getCell('prio').font = { bold: true, color: { argb: PRIO_COLOR[t.prioridad] } };
+        row.getCell('fecha').numFmt = 'dd/mm/yyyy';
+        row.getCell('avance').numFmt = '0%';
+        var n = dias(t.fecha);
+        if (c.id !== 'hecho' && n !== null && n < 0) row.getCell('plazo').font = { bold: true, color: { argb: 'FFBE3A2E' } };
+      });
+    });
+    var h = wd.getRow(1);
+    h.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    h.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF15222B' } };
+    h.alignment = { vertical: 'middle' };
+    h.height = 22;
+    wd.autoFilter = { from: 'A1', to: 'I1' };
+    return wb;
+  }
+
+  async function generar() {
+    var tareas = window.itiTodas ? window.itiTodas() : [];
+    tareas = tareas.filter(function (t) { return t.titulo && t.titulo.trim(); });
+    await cargarLib();
+    var wb = armar(tareas);
+    var buf = await wb.xlsx.writeBuffer();
+    var blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'reporte-kanban-' + hoyISO() + '.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    var b = document.getElementById('reporte');
+    if (!b) return;
+    var txt = b.textContent, vuelta = null;
+    b.addEventListener('click', async function () {
+      clearTimeout(vuelta);
+      b.disabled = true;
+      b.textContent = 'Generando…';
+      try {
+        await generar();
+        b.textContent = 'Reporte descargado';
+      } catch (e) {
+        console.error(e);
+        b.textContent = 'No se pudo generar';
+      }
+      b.disabled = false;
+      vuelta = setTimeout(function () { b.textContent = txt; }, 2500);
+    });
+  });
 })();
 </script>
 
@@ -827,7 +1085,10 @@ end
   <header class="cab">
     <div class="cab-top">
       <p class="hoy" id="hoy"></p>
-      <button type="button" class="tema" id="tema">Modo oscuro</button>
+      <div class="cab-acc">
+        <button type="button" class="tema" id="reporte" title="Descarga un Excel tipo kanban: pendiente, en proceso y hecho">Reporte Excel</button>
+        <button type="button" class="tema" id="tema">Modo oscuro</button>
+      </div>
     </div>
     <h1>Itinerario de trabajo</h1>
     <p class="resumen" aria-live="polite">
