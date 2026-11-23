@@ -425,7 +425,9 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
   var ui = { vista: 'tablero', q: '', resp: '', proy: '', venc: false, orden: 'manual', plegado: { hecho: true } };
   var abierta = null;           // id de la tarea abierta en el panel
   var conectado = false;        // true cuando se cargó correctamente desde la base de datos
-  var guardandoTimer = null, pendiente = false;
+  var guardandoTimer = null, pendiente = false, enviando = false;
+  // Lo último que se sabe que tiene el servidor: id de servidor -> cuerpo de la tarea, y su orden.
+  var servidor = {}, ordenServidor = [];
 
   function normalizar(r) {
     var pasos = (Array.isArray(r.pasos) ? r.pasos : []).map(function (p) {
@@ -434,21 +436,22 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
     var estado = ESTADOS.some(function (e) { return e.id === r.estado; }) ? r.estado
       : (r.hecha ? 'hecho' : (pasos.some(function (p) { return p.ok; }) ? 'curso' : 'pendiente'));
     return {
-      id: uid(), titulo: String(r.titulo || ''), proyecto: String(r.proyecto || ''),
+      id: uid(), sid: typeof r.id === 'number' ? r.id : null,   // sid: id en el servidor (null si aún no se creó)
+      titulo: String(r.titulo || ''), proyecto: String(r.proyecto || ''),
       prioridad: PRIO[r.prioridad] ? r.prioridad : 'media',
       fecha: /^\d{4}-\d{2}-\d{2}$/.test(r.fecha || '') ? r.fecha : '',
       estado: estado, asignado: String(r.asignado || ''), pasos: pasos
     };
   }
-  function paraEnviar() {
-    return tareas.map(function (t) {
-      return {
-        titulo: t.titulo, proyecto: t.proyecto, prioridad: t.prioridad, fecha: t.fecha,
-        estado: t.estado, hecha: t.estado === 'hecho' ? 1 : 0, asignado: t.asignado,
-        pasos: t.pasos.map(function (p) { return { t: p.t, ok: p.ok, a: p.a }; })
-      };
-    });
+  // Cuerpo que entiende la API REST (sin ids).
+  function cuerpo(t) {
+    return {
+      titulo: t.titulo.trim() || '(sin título)', proyecto: t.proyecto.trim(), prioridad: t.prioridad, fecha: t.fecha,
+      estado: t.estado, asignado: t.asignado.trim(),
+      pasos: t.pasos.filter(function (p) { return p.t.trim(); }).map(function (p) { return { t: p.t.trim(), ok: p.ok, a: p.a.trim() }; })
+    };
   }
+  function paraEnviar() { return tareas.map(cuerpo); }
   var porId = function (id) { return tareas.filter(function (t) { return t.id === id; })[0]; };
 
   /* ================== Persistencia ================== */
@@ -469,25 +472,96 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
     clearTimeout(guardandoTimer);
     guardandoTimer = setTimeout(enviar, 500);
   }
+  // Compara lo que hay en pantalla con lo último que tiene el servidor y devuelve solo lo que cambió:
+  //   borrar: ids de servidor que ya no están · crear: tareas nuevas · cambiar: tareas con campos distintos.
+  function plan() {
+    var vivas = {}, crear = [], cambiar = [];
+    tareas.forEach(function (t) {
+      var c = cuerpo(t), previo = t.sid != null ? servidor[t.sid] : undefined;
+      if (previo === undefined) { crear.push({ t: t, cuerpo: c }); return; }
+      vivas[t.sid] = true;
+      var campos = {}, hay = false;
+      Object.keys(c).forEach(function (k) {
+        if (JSON.stringify(c[k]) !== JSON.stringify(previo[k])) { campos[k] = c[k]; hay = true; }
+      });
+      if (hay) cambiar.push({ t: t, sid: t.sid, campos: campos, cuerpo: c });
+    });
+    var borrar = Object.keys(servidor).filter(function (sid) { return !vivas[sid]; });
+    return { borrar: borrar, crear: crear, cambiar: cambiar };
+  }
+  function llamar(metodo, url, datos) {
+    var o = { method: metodo };
+    if (datos !== undefined) { o.headers = { 'Content-Type': 'application/json' }; o.body = JSON.stringify(datos); }
+    return conTiempo(url, o);
+  }
+  function exito(r, tolerar404) {
+    if (!r.ok && !(tolerar404 && r.status === 404)) throw new Error('HTTP ' + r.status);
+  }
+  async function crearEnServidor(t, c) {
+    var r = await llamar('POST', API, c);
+    exito(r);
+    var creada = await r.json();
+    t.sid = creada.id; servidor[creada.id] = c; ordenServidor.push(creada.id);
+  }
+
+  // DELETE / POST / PATCH por tarea y, al final, PUT /orden si cambió el orden manual.
+  // Cada paso actualiza "servidor" al terminar, así que un reintento solo repite lo que falló.
+  async function sincronizar() {
+    var p = plan();
+    for (var i = 0; i < p.borrar.length; i++) {
+      var sid = p.borrar[i];
+      exito(await llamar('DELETE', API + '/' + sid), true);
+      delete servidor[sid];
+      ordenServidor = ordenServidor.filter(function (x) { return String(x) !== sid; });
+    }
+    for (i = 0; i < p.crear.length; i++) await crearEnServidor(p.crear[i].t, p.crear[i].cuerpo);
+    for (i = 0; i < p.cambiar.length; i++) {
+      var ch = p.cambiar[i], r = await llamar('PATCH', API + '/' + ch.sid, ch.campos);
+      if (r.status === 404) {                       // la borró otra persona: se vuelve a crear
+        delete servidor[ch.sid];
+        ordenServidor = ordenServidor.filter(function (x) { return x !== ch.sid; });
+        await crearEnServidor(ch.t, ch.cuerpo);
+        continue;
+      }
+      exito(r);
+      servidor[ch.sid] = ch.cuerpo;
+    }
+    var ids = tareas.filter(function (t) { return t.sid != null && servidor[t.sid] !== undefined; }).map(function (t) { return t.sid; });
+    if (JSON.stringify(ids) !== JSON.stringify(ordenServidor)) {
+      var ro = await llamar('PUT', API + '/orden', { ids: ids });
+      exito(ro);
+      ordenServidor = (await ro.json()).ids;
+    }
+  }
+
   async function enviar() {
-    if (!pendiente) return;
-    pendiente = false;
+    if (!pendiente || enviando) return;
+    enviando = true; pendiente = false;
+    var fallo = false;
     try {
-      var r = await conTiempo(API, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tareas: paraEnviar() }) });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      await sincronizar();
       if (!pendiente) estadoGuardado('Guardado');
     } catch (e) {
+      fallo = true;
       console.warn('No se pudo guardar', e);
       pendiente = true;
       estadoGuardado('Sin guardar · reintentando…', true);
       clearTimeout(guardandoTimer);
       guardandoTimer = setTimeout(enviar, 8000);
+    } finally {
+      enviando = false;
+      if (pendiente && !fallo) { clearTimeout(guardandoTimer); guardandoTimer = setTimeout(enviar, 0); }
     }
   }
+  // Al cerrar la pestaña: envía en paralelo lo que quedó pendiente (el orden manual se guarda en la próxima visita).
   window.addEventListener('pagehide', function () {
-    if (pendiente && conectado) {
-      try { fetch(API, { method: 'PUT', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tareas: paraEnviar() }) }); } catch (e) { /* nada */ }
-    }
+    if (!(pendiente || enviando) || !conectado) return;
+    var p = plan(), ped = function (m, url, datos) {
+      try { fetch(url, { method: m, keepalive: true, headers: { 'Content-Type': 'application/json' }, body: datos === undefined ? undefined : JSON.stringify(datos) }); } catch (e) { /* nada */ }
+    };
+    p.borrar.forEach(function (sid) { ped('DELETE', API + '/' + sid); });
+    p.crear.forEach(function (x) { ped('POST', API, x.cuerpo); });
+    p.cambiar.forEach(function (x) { ped('PATCH', API + '/' + x.sid, x.campos); });
   });
 
   async function cargar() {
@@ -496,19 +570,21 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
       var r = await conTiempo(API);
       if (!r.ok) throw new Error('HTTP ' + r.status);
       var d = await r.json();
-      tareas = (d.tareas || []).map(normalizar);
+      if (!Array.isArray(d)) throw new Error('respuesta inesperada');
+      tareas = d.map(normalizar);
+      servidor = {}; ordenServidor = [];
+      tareas.forEach(function (t) { servidor[t.sid] = cuerpo(t); ordenServidor.push(t.sid); });
       conectado = true; ok = true;
-      if (!d.inicializado) leerCopiaLocal(true);
       estadoGuardado('Guardado');
     } catch (e) {
       console.warn('Sin conexión con la base de datos', e);
     }
-    if (!ok) { leerCopiaLocal(false); $('offline').hidden = false; estadoGuardado('Solo en este navegador', true); }
+    if (!ok) { leerCopiaLocal(); $('offline').hidden = false; estadoGuardado('Solo en este navegador', true); }
   }
-  function leerCopiaLocal(subir) {
+  function leerCopiaLocal() {
     try {
       var d = JSON.parse(localStorage.getItem(LS_DATOS) || 'null');
-      if (Array.isArray(d)) { tareas = d.map(normalizar); if (subir && tareas.length) guardar(); }
+      if (Array.isArray(d)) tareas = d.map(normalizar);
     } catch (e) { /* copia dañada: se ignora */ }
   }
 
