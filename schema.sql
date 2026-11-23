@@ -6,7 +6,9 @@ CREATE TABLE IF NOT EXISTS tareas (
   proyecto  TEXT    NOT NULL DEFAULT '',
   prioridad TEXT    NOT NULL DEFAULT 'media' CHECK (prioridad IN ('alta','media','baja')),
   fecha     TEXT    NOT NULL DEFAULT '',
-  pasos     TEXT    NOT NULL DEFAULT '[]'
+  pasos     TEXT    NOT NULL DEFAULT '[]',
+  estado    TEXT    NOT NULL DEFAULT 'pendiente',
+  asignado  TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_tareas_hecha_orden ON tareas (hecha, orden);
