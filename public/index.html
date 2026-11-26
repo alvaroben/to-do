@@ -265,6 +265,12 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .eq-nombre small { color: var(--muted); font-size: 12px; }
 .eq-quitar { border: 1px solid var(--line-strong); background: var(--surface); color: var(--muted); border-radius: 6px; height: 30px; padding: 0 10px; font-size: 13px; flex: none; }
 .eq-quitar:hover { color: var(--alta); border-color: var(--alta); background: var(--alta-bg); }
+.eq-btn { border: 1px solid var(--line-strong); background: var(--surface); color: var(--muted); border-radius: 6px; height: 30px; padding: 0 10px; font-size: 13px; flex: none; }
+.eq-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.eq-btn.prim { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.eq-acciones { display: flex; gap: 6px; flex: none; }
+.eq-editar { flex: 1; min-width: 0; height: 32px; padding: 0 8px; border: 1px solid var(--accent); border-radius: 6px; background: var(--surface); }
+@media (max-width: 560px) { .eq-lista li { flex-wrap: wrap; } .eq-acciones { margin-left: auto; } }
 .eq-vacio, .eq-nota { color: var(--muted); font-size: 13px; margin: 0; }
 
 @media (max-width: 900px) {
@@ -358,7 +364,7 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
     </form>
     <p class="eq-error" id="eq-error" role="alert" hidden></p>
     <div id="eq-lista"></div>
-    <p class="eq-nota">Las personas del equipo aparecen al elegir responsable aunque todavía no tengan tareas. Quitar a alguien del equipo no cambia las tareas que ya tiene asignadas.</p>
+    <p class="eq-nota">Las personas del equipo aparecen al elegir responsable aunque todavía no tengan tareas. Cambiar el nombre lo actualiza también en sus tareas y pasos. Quitar a alguien del equipo no cambia las tareas que ya tiene asignadas.</p>
   </div>
 </aside>
 
@@ -980,6 +986,32 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
     equipo = equipo.filter(function (x) { return x.id !== p.id; });
     copiaEquipo();
   }
+  // Cambia el nombre en el servidor (equipo + tareas + pasos) y aplica lo mismo en pantalla.
+  async function renombrarPersona(p, nuevo) {
+    nuevo = (nuevo || '').trim().replace(/\s+/g, ' ');
+    if (!nuevo) throw new Error('Escribe el nombre de la persona.');
+    if (nuevo === p.nombre) return p;
+    var otra = equipo.filter(function (x) { return x.id !== p.id && igual(x.nombre, nuevo); })[0];
+    if (otra) throw new Error('Ya hay otra persona llamada ' + otra.nombre + '.');
+    if (!conectado) throw new Error('Sin conexión con la base de datos: no se puede cambiar ahora.');
+    var r;
+    try { r = await llamar('PATCH', API_PERSONAS + '/' + p.id, { nombre: nuevo }); }
+    catch (e) { throw new Error('No se pudo conectar. Inténtalo de nuevo.'); }
+    var d = await r.json().catch(function () { return {}; });
+    if (r.status === 404) { equipo = equipo.filter(function (x) { return x.id !== p.id; }); copiaEquipo(); throw new Error('Esa persona ya no está en el equipo.'); }
+    if (!r.ok) throw new Error((d.detalles && d.detalles.nombre) || (r.status === 409 ? 'Ya hay otra persona con ese nombre.' : 'No se pudo cambiar (HTTP ' + r.status + ').'));
+    var viejo = p.nombre, final = String(d.nombre || nuevo);
+    p.nombre = final; ordenarEquipo(); copiaEquipo();
+    // El servidor ya cambió las tareas: se aplica igual en pantalla y en la copia de lo que tiene el servidor,
+    // así no se reenvían esos cambios (y las ediciones pendientes conservan el nombre nuevo).
+    var cambiar = function (n) { return n.trim() && igual(n, viejo) ? final : n; };
+    var aplicar = function (t) { t.asignado = cambiar(t.asignado); t.pasos.forEach(function (x) { x.a = cambiar(x.a); }); };
+    tareas.forEach(aplicar);
+    Object.keys(servidor).forEach(function (sid) { if (servidor[sid]) aplicar(servidor[sid]); });
+    if (ui.resp && ui.resp !== '__none' && igual(ui.resp, viejo)) { ui.resp = final; guardarUI(); }
+    copiaLocal();
+    return p;
+  }
   // Un nombre nuevo escrito como responsable pasa a formar parte del equipo.
   function asegurarEnEquipo(nombre) {
     if (!nombre || !conectado || equipo.some(function (p) { return igual(p.nombre, nombre); })) return;
@@ -988,6 +1020,36 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
   }
 
   function errorEquipo(msg) { var e = $('eq-error'); e.textContent = msg || ''; e.hidden = !msg; }
+  var editandoEq = null;        // nombre de la persona cuyo nombre se está cambiando en el panel Equipo
+  function filaEditar(n, guardada) {
+    var inp = el('input', { type: 'text', class: 'eq-editar', maxlength: '60', 'aria-label': 'Nuevo nombre de ' + n, autocomplete: 'off' });
+    inp.value = n;
+    var ok = el('button', { type: 'button', class: 'eq-btn prim', text: 'Guardar' });
+    var no = el('button', { type: 'button', class: 'eq-btn', text: 'Cancelar' });
+    var cancelar = function () { editandoEq = null; errorEquipo(''); renderEquipo(); };
+    var guardarNombre = async function () {
+      ok.disabled = no.disabled = inp.disabled = true; errorEquipo('');
+      try {
+        var p = guardada || await agregarPersona(n);     // si solo aparecía en tareas, primero entra al equipo
+        await renombrarPersona(p, inp.value);
+        editandoEq = null;
+        render(); renderEquipo();
+        if (p.nombre !== n) aviso(n + ' ahora se llama ' + p.nombre + '.');
+      } catch (e) {
+        ok.disabled = no.disabled = inp.disabled = false;
+        errorEquipo(e.message || 'No se pudo cambiar el nombre.');
+        inp.focus();
+      }
+    };
+    inp.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); guardarNombre(); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelar(); }
+    });
+    ok.addEventListener('click', guardarNombre);
+    no.addEventListener('click', cancelar);
+    setTimeout(function () { inp.focus(); inp.select(); }, 0);
+    return el('li', null, avatar(n), inp, el('span', { class: 'eq-acciones' }, ok, no));
+  }
   function renderEquipo() {
     var nombres = personas(), cont = $('eq-lista');
     if (!nombres.length) {
@@ -997,10 +1059,16 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
     var ul = el('ul', { class: 'eq-lista', 'aria-label': 'Personas del equipo' });
     nombres.forEach(function (n) {
       var guardada = equipo.filter(function (p) { return igual(p.nombre, n); })[0];
+      if (editandoEq && igual(editandoEq, n)) { ul.appendChild(filaEditar(n, guardada)); return; }
       var abiertas = tareas.filter(function (t) { return t.estado !== 'hecho' && esDe(t, n); }).length;
       var info = abiertas ? abiertas + (abiertas === 1 ? ' tarea abierta' : ' tareas abiertas') : 'Sin tareas abiertas';
       if (!guardada) info += ' · solo aparece en tareas';
       var fila = el('li', null, avatar(n), el('span', { class: 'eq-nombre' }, el('b', { text: n }), el('small', { text: info })));
+      var acciones = el('span', { class: 'eq-acciones' });
+      var ren = el('button', { type: 'button', class: 'eq-btn', 'aria-label': 'Cambiar el nombre de ' + n, title: 'Cambiar el nombre', text: 'Editar' });
+      ren.addEventListener('click', function () { editandoEq = n; errorEquipo(''); renderEquipo(); });
+      acciones.appendChild(ren);
+      fila.appendChild(acciones);
       if (guardada) {
         var b = el('button', { type: 'button', class: 'eq-quitar', 'aria-label': 'Quitar a ' + n + ' del equipo', text: 'Quitar' });
         b.addEventListener('click', async function () {
@@ -1008,7 +1076,7 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
           try { await quitarPersona(guardada); render(); renderEquipo(); aviso(n + ' ya no está en el equipo.'); }
           catch (e) { b.disabled = false; errorEquipo(e.message || 'No se pudo quitar. Inténtalo de nuevo.'); }
         });
-        fila.appendChild(b);
+        acciones.appendChild(b);
       }
       ul.appendChild(fila);
     });
@@ -1017,7 +1085,7 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
   function abrirEquipo() {
     if (abierta) cerrarPanel();
     ultimoFoco = document.activeElement;
-    errorEquipo('');
+    editandoEq = null; errorEquipo('');
     $('velo').hidden = false; $('equipo').hidden = false;
     renderEquipo();
     $('eq-nombre').focus();

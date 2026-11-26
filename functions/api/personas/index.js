@@ -7,6 +7,7 @@
 // Quitar a una persona: ver [id].js.
 
 import { error, json, leerJson, metodoNoPermitido, origenValido } from '../../../lib/tareas.js';
+import { validarNombre } from '../../../lib/personas.js';
 
 export const MAX_PERSONAS = 200;
 
@@ -20,9 +21,8 @@ export async function onRequestPost({ request, env }) {
   const { body, fallo } = await leerJson(request);
   if (fallo) return fallo;
 
-  const nombre = typeof body.nombre === 'string' ? body.nombre.trim().replace(/\s+/g, ' ') : '';
-  if (!nombre) return error(400, 'datos inválidos', { nombre: 'obligatorio, texto no vacío' });
-  if (nombre.length > 60) return error(400, 'datos inválidos', { nombre: 'máximo 60 caracteres' });
+  const { nombre, fallo: invalido } = validarNombre(body.nombre);
+  if (invalido) return invalido;
 
   const existente = await env.DB.prepare('SELECT id, nombre FROM personas WHERE nombre = ?').bind(nombre).first();
   if (existente) return json(existente);
