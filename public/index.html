@@ -252,6 +252,21 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .aviso-in { pointer-events: auto; display: flex; align-items: center; gap: 14px; padding: 10px 14px; border-radius: 6px; background: var(--ink); color: var(--bg); box-shadow: var(--shadow-pop); }
 .aviso-in button { border: 0; background: none; color: inherit; font-weight: 700; text-decoration: underline; padding: 2px 4px; }
 
+/* ---------- Equipo ---------- */
+.eq-alta { display: flex; gap: 8px; }
+.eq-alta input { flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); }
+.eq-alta input:focus { border-color: var(--accent); }
+.eq-error { color: var(--alta); font-size: 13px; margin: -8px 0 0; }
+.eq-lista { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 6px; }
+.eq-lista li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; min-height: 48px; }
+.eq-lista li + li { border-top: 1px solid var(--line); }
+.eq-nombre { flex: 1; min-width: 0; display: grid; }
+.eq-nombre b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eq-nombre small { color: var(--muted); font-size: 12px; }
+.eq-quitar { border: 1px solid var(--line-strong); background: var(--surface); color: var(--muted); border-radius: 6px; height: 30px; padding: 0 10px; font-size: 13px; flex: none; }
+.eq-quitar:hover { color: var(--alta); border-color: var(--alta); background: var(--alta-bg); }
+.eq-vacio, .eq-nota { color: var(--muted); font-size: 13px; margin: 0; }
+
 @media (max-width: 900px) {
   .tablero { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; gap: 12px; margin: 0 -16px; padding: 0 16px 10px; }
   .col { flex: 0 0 min(84vw, 360px); scroll-snap-align: start; }
@@ -276,6 +291,7 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
       Itinerario de trabajo
     </div>
     <span class="guardado" id="guardado" role="status" aria-live="polite"></span>
+    <button type="button" class="btn-top" id="eq-abrir" title="Agregar o quitar personas que pueden ser responsables">Equipo</button>
     <button type="button" class="btn-top" id="reporte" title="Descarga un Excel con el tablero y el detalle por responsable">Reporte Excel</button>
     <button type="button" class="btn-top" id="tema">Modo oscuro</button>
   </div>
@@ -333,6 +349,19 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
   <div class="panel-pie"><button type="button" class="btn peligro" id="p-borrar">Eliminar tarea</button><button type="button" class="btn" id="p-listo">Listo</button></div>
 </aside>
 
+<aside class="panel" id="equipo" role="dialog" aria-modal="true" aria-labelledby="eq-titulo" hidden>
+  <div class="panel-cab"><span id="eq-titulo">Equipo</span><button type="button" class="cerrar" id="eq-cerrar" aria-label="Cerrar">×</button></div>
+  <div class="panel-cuerpo">
+    <form class="eq-alta" id="eq-form" autocomplete="off">
+      <input id="eq-nombre" type="text" maxlength="60" placeholder="Nombre de la nueva persona" aria-label="Nombre de la nueva persona">
+      <button class="btn" type="submit">Agregar</button>
+    </form>
+    <p class="eq-error" id="eq-error" role="alert" hidden></p>
+    <div id="eq-lista"></div>
+    <p class="eq-nota">Las personas del equipo aparecen al elegir responsable aunque todavía no tengan tareas. Quitar a alguien del equipo no cambia las tareas que ya tiene asignadas.</p>
+  </div>
+</aside>
+
 <datalist id="personas"></datalist>
 <datalist id="proyectos"></datalist>
 <div class="aviso" id="aviso" hidden><div class="aviso-in" role="status"><span id="aviso-txt"></span><button type="button" id="aviso-undo" hidden>Deshacer</button></div></div>
@@ -342,8 +371,8 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
   'use strict';
 
   /* ================== Constantes y utilidades ================== */
-  var API = '/api/tareas';
-  var LS_DATOS = 'itinerario-v2-datos', LS_UI = 'itinerario-v2-ui', LS_TEMA = 'itinerario-tema';
+  var API = '/api/tareas', API_PERSONAS = '/api/personas';
+  var LS_DATOS = 'itinerario-v2-datos', LS_UI = 'itinerario-v2-ui', LS_TEMA = 'itinerario-tema', LS_EQUIPO = 'itinerario-v2-equipo';
   var ESTADOS = [
     { id: 'pendiente', nombre: 'Por hacer' },
     { id: 'curso', nombre: 'En curso' },
@@ -422,6 +451,7 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
 
   /* ================== Estado ================== */
   var tareas = [];
+  var equipo = [];              // personas guardadas en el servidor: [{ id, nombre }]
   var ui = { vista: 'tablero', q: '', resp: '', proy: '', venc: false, orden: 'manual', plegado: { hecho: true } };
   var abierta = null;           // id de la tarea abierta en el panel
   var conectado = false;        // true cuando se cargó correctamente desde la base de datos
@@ -595,6 +625,7 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
       n = (n || '').trim();
       if (n && !vistos[n.toLowerCase()]) { vistos[n.toLowerCase()] = 1; lista.push(n); }
     };
+    equipo.forEach(function (p) { add(p.nombre); });
     tareas.forEach(function (t) { add(t.asignado); t.pasos.forEach(function (p) { add(p.a); }); });
     return lista.sort(function (a, b) { return a.localeCompare(b, 'es'); });
   }
@@ -907,6 +938,95 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
     if (ui.vista === 'lista') renderLista(); else renderTablero();
   }
 
+  /* ================== Equipo ================== */
+  function ordenarEquipo() { equipo.sort(function (a, b) { return a.nombre.localeCompare(b.nombre, 'es'); }); }
+  function copiaEquipo() { try { localStorage.setItem(LS_EQUIPO, JSON.stringify(equipo)); } catch (e) { /* sin almacenamiento */ } }
+  function normalizarEquipo(d) {
+    return (Array.isArray(d) ? d : []).filter(function (p) { return p && typeof p.id === 'number' && typeof p.nombre === 'string' && p.nombre.trim(); })
+      .map(function (p) { return { id: p.id, nombre: p.nombre.trim() }; });
+  }
+  async function cargarEquipo() {
+    try {
+      var r = await conTiempo(API_PERSONAS);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      equipo = normalizarEquipo(await r.json());
+      copiaEquipo();
+    } catch (e) {
+      console.warn('No se pudo cargar el equipo', e);
+      try { equipo = normalizarEquipo(JSON.parse(localStorage.getItem(LS_EQUIPO) || 'null')); } catch (e2) { equipo = []; }
+    }
+    ordenarEquipo();
+  }
+  // Agrega una persona al equipo en el servidor. Devuelve la persona guardada o lanza un Error con mensaje para mostrar.
+  async function agregarPersona(nombre) {
+    nombre = (nombre || '').trim().replace(/\s+/g, ' ');
+    if (!nombre) throw new Error('Escribe el nombre de la persona.');
+    if (!conectado) throw new Error('Sin conexión con la base de datos: no se puede agregar ahora.');
+    var r;
+    try { r = await llamar('POST', API_PERSONAS, { nombre: nombre }); }
+    catch (e) { throw new Error('No se pudo conectar. Inténtalo de nuevo.'); }
+    var d = await r.json().catch(function () { return {}; });
+    if (!r.ok) throw new Error((d.detalles && d.detalles.nombre) || d.error || 'No se pudo agregar (HTTP ' + r.status + ').');
+    var p = normalizarEquipo([d])[0];
+    if (!p) throw new Error('Respuesta inesperada del servidor.');
+    equipo = equipo.filter(function (x) { return x.id !== p.id; });
+    equipo.push(p); ordenarEquipo(); copiaEquipo();
+    return p;
+  }
+  async function quitarPersona(p) {
+    if (!conectado) throw new Error('Sin conexión con la base de datos: no se puede quitar ahora.');
+    try { exito(await llamar('DELETE', API_PERSONAS + '/' + p.id), true); }
+    catch (e) { throw new Error('No se pudo quitar. Inténtalo de nuevo.'); }
+    equipo = equipo.filter(function (x) { return x.id !== p.id; });
+    copiaEquipo();
+  }
+  // Un nombre nuevo escrito como responsable pasa a formar parte del equipo.
+  function asegurarEnEquipo(nombre) {
+    if (!nombre || !conectado || equipo.some(function (p) { return igual(p.nombre, nombre); })) return;
+    agregarPersona(nombre).then(function () { render(); if (!$('equipo').hidden) renderEquipo(); })
+      .catch(function (e) { console.warn('No se pudo agregar al equipo', e); });
+  }
+
+  function errorEquipo(msg) { var e = $('eq-error'); e.textContent = msg || ''; e.hidden = !msg; }
+  function renderEquipo() {
+    var nombres = personas(), cont = $('eq-lista');
+    if (!nombres.length) {
+      cont.replaceChildren(el('p', { class: 'eq-vacio', text: 'Todavía no hay nadie en el equipo. Escribe arriba el nombre de la primera persona.' }));
+      return;
+    }
+    var ul = el('ul', { class: 'eq-lista', 'aria-label': 'Personas del equipo' });
+    nombres.forEach(function (n) {
+      var guardada = equipo.filter(function (p) { return igual(p.nombre, n); })[0];
+      var abiertas = tareas.filter(function (t) { return t.estado !== 'hecho' && esDe(t, n); }).length;
+      var info = abiertas ? abiertas + (abiertas === 1 ? ' tarea abierta' : ' tareas abiertas') : 'Sin tareas abiertas';
+      if (!guardada) info += ' · solo aparece en tareas';
+      var fila = el('li', null, avatar(n), el('span', { class: 'eq-nombre' }, el('b', { text: n }), el('small', { text: info })));
+      if (guardada) {
+        var b = el('button', { type: 'button', class: 'eq-quitar', 'aria-label': 'Quitar a ' + n + ' del equipo', text: 'Quitar' });
+        b.addEventListener('click', async function () {
+          b.disabled = true; errorEquipo('');
+          try { await quitarPersona(guardada); render(); renderEquipo(); aviso(n + ' ya no está en el equipo.'); }
+          catch (e) { b.disabled = false; errorEquipo(e.message || 'No se pudo quitar. Inténtalo de nuevo.'); }
+        });
+        fila.appendChild(b);
+      }
+      ul.appendChild(fila);
+    });
+    cont.replaceChildren(ul);
+  }
+  function abrirEquipo() {
+    if (abierta) cerrarPanel();
+    ultimoFoco = document.activeElement;
+    errorEquipo('');
+    $('velo').hidden = false; $('equipo').hidden = false;
+    renderEquipo();
+    $('eq-nombre').focus();
+  }
+  function cerrarEquipo() {
+    $('velo').hidden = true; $('equipo').hidden = true;
+    if (ultimoFoco && ultimoFoco.focus && document.contains(ultimoFoco)) ultimoFoco.focus();
+  }
+
   /* ================== Panel de detalle ================== */
   var ultimoFoco = null;
   function abrirPanel(id, nuevo) {
@@ -957,6 +1077,7 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
       inResp.value = v;
       cambio(function () { t.asignado = v; });
       avResp.replaceChildren(avatar(v, 'lg'));
+      asegurarEnEquipo(v);
     });
 
     var selPrio = el('select', { 'aria-label': 'Prioridad' },
@@ -1039,6 +1160,7 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
         var v = canonico(ra.value, personas()); ra.value = v;
         cambio(function () { p.a = v; });
         slot.replaceChildren(avatar(v, 'sm'));
+        asegurarEnEquipo(v);
       });
       var q = el('button', { type: 'button', class: 'quitar', 'aria-label': 'Quitar paso', text: '×' });
       q.addEventListener('click', function () { foto(); cambio(function () { t.pasos.splice(t.pasos.indexOf(p), 1); }); renderPasos(); aviso('Paso eliminado.', true); });
@@ -1246,8 +1368,29 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
 
     $('cerrar').addEventListener('click', cerrarPanel);
     $('p-listo').addEventListener('click', cerrarPanel);
-    $('velo').addEventListener('click', cerrarPanel);
-    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && abierta) cerrarPanel(); });
+    $('velo').addEventListener('click', function () { if (!$('equipo').hidden) cerrarEquipo(); else cerrarPanel(); });
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape') return;
+      if (!$('equipo').hidden) cerrarEquipo(); else if (abierta) cerrarPanel();
+    });
+    $('eq-abrir').addEventListener('click', abrirEquipo);
+    $('eq-cerrar').addEventListener('click', cerrarEquipo);
+    $('eq-form').addEventListener('submit', async function (e) {
+      e.preventDefault();
+      var inp = $('eq-nombre'), btn = this.querySelector('button[type=submit]');
+      var nombre = inp.value.trim().replace(/\s+/g, ' ');
+      if (!nombre) { errorEquipo('Escribe el nombre de la persona.'); inp.focus(); return; }
+      var previa = equipo.filter(function (p) { return igual(p.nombre, nombre); })[0];
+      if (previa) { errorEquipo(previa.nombre + ' ya está en el equipo.'); inp.select(); return; }
+      btn.disabled = true; errorEquipo('');
+      try {
+        var p = await agregarPersona(canonico(nombre, personas()));
+        inp.value = '';
+        render(); renderEquipo();
+        aviso(p.nombre + ' se agregó al equipo.');
+      } catch (err) { errorEquipo(err.message); }
+      btn.disabled = false; inp.focus();
+    });
     var b = $('p-borrar'), armado = null;
     b.addEventListener('click', function () {
       if (!abierta) return;
@@ -1270,7 +1413,7 @@ td.c-tit .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
     enlazar();
     render();
     estadoGuardado('Cargando…');
-    await cargar();
+    await Promise.all([cargar(), cargarEquipo()]);
     render();
   }
   iniciar();
